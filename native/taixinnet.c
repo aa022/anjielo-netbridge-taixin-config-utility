@@ -123,7 +123,10 @@ static void secure_zero(void *data, size_t size) {
 
 static void copy_text(char *dest, size_t size, const char *source) {
     if (!size) return;
-    snprintf(dest, size, "%s", source ? source : "");
+    if (!source) source = "";
+    size_t length = strnlen(source, size - 1);
+    memcpy(dest, source, length);
+    dest[length] = '\0';
 }
 
 static void result_init(ahnb_operation_result *result) {

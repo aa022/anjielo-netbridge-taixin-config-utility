@@ -15,6 +15,12 @@ endif
 
 UV := $(shell command -v uv 2>/dev/null)
 
+PATH_HINT = bin="$$($(BIN_DIR_CMD))"; \
+	echo "ahnb and ah-netbridge-config were installed to $$bin"; \
+	case ":$$PATH:" in *":$$bin:"*) ;; *) \
+	echo "$$bin is not on your PATH. Add this line to your shell profile (~/.zshrc or ~/.bashrc), then open a new terminal:"; \
+	echo "  export PATH=\"$$bin:\$$PATH\"";; esac
+
 .PHONY: run native lock clean fclean install re
 
 native: $(NATIVE_LIB)
@@ -24,17 +30,23 @@ $(NATIVE_LIB): native/taixinnet.c include/taixinnet.h
 	$(CC) $(DEV_CFLAGS) -Iinclude $(SHARED_FLAG) -o $@ native/taixinnet.c
 
 ifneq ($(UV),)
+BIN_DIR_CMD := uv tool dir --bin
+
+run: DEV_CFLAGS := $(BASE_CFLAGS)
 run: native
 	uv sync --locked
 	uv run ah-netbridge-config
 
 install:
 	uv tool install --force .
+	@$(PATH_HINT)
 
 lock:
 	uv lock
 	uv export --format requirements-txt --no-dev --no-emit-project > requirements.lock
 else
+BIN_DIR_CMD := $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('scripts', sysconfig.get_preferred_scheme('user')))"
+
 run:
 	test -x .venv/bin/python || $(PYTHON) -m venv .venv
 	.venv/bin/python -m pip install .
@@ -46,6 +58,7 @@ install:
 		echo "Or use a venv: python3 -m venv .venv && .venv/bin/pip install ." >&2; \
 		exit 1; \
 	}
+	@$(PATH_HINT)
 
 lock:
 	@echo "uv is required to regenerate lockfiles" >&2
