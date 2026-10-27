@@ -1,0 +1,10 @@
+schema_version = 1
+id = "ce-europe-av-2mhz"
+name = "CE / Europe audio/video — 2 MHz"
+description = "TaiXin-published audio/video channel set: 866 MHz at 2 MHz bandwidth."
+jurisdiction = "CE / Europe — audio/video applications"
+source_url = "https://taixin-semi.com/docs/txw8301/latest/%E6%B3%B0%E8%8A%AFah-rf-emc%E8%AE%A4%E8%AF%81%E6%8C%87%E5%8D%97-v2-6"
+warning = "Only use with a CE-capable TX-AH-R900PNR-860M or TX-AH-R900P implementation. TaiXin excludes 863–865 MHz audio/video operation because the applicable allocation there is limited to 300 kHz. Verify current national rules, antenna gain/EIRP, and polite-spectrum-access or duty-cycle requirements; this preset is not authorization. The selected 14 dBm is not a certified legal limit."
+channels_khz = [866000]
+bandwidth_mhz = 2
+tx_power_dbm = 14

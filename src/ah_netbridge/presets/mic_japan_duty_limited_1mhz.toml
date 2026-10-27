@@ -1,0 +1,10 @@
+schema_version = 1
+id = "mic-japan-duty-limited-1mhz"
+name = "MIC / Japan duty-limited — 1 MHz"
+description = "TaiXin-published duty-limited channel set: 921.5 through 926.5 MHz in 1 MHz steps, at 1 MHz bandwidth."
+jurisdiction = "Japan MIC — 920.5–928.1 MHz duty-limited class"
+source_url = "https://taixin-semi.com/docs/txw8301/latest/%E6%B3%B0%E8%8A%AFah-rf-emc%E8%AE%A4%E8%AF%81%E6%8C%87%E5%8D%97-v2-6"
+warning = "Only use with a Japan-MIC-capable TX-AH-R900PNR or TX-AH-R900P implementation whose certification covers this duty-limited class. You must enforce the applicable duty cycle and confirm the certified module, antenna, channel-access behavior, and current Japanese requirements. The vendor's 10 dBm test value is not blanket authorization or a universal legal limit."
+channels_khz = [921500, 922500, 923500, 924500, 925500, 926500]
+bandwidth_mhz = 1
+tx_power_dbm = 10

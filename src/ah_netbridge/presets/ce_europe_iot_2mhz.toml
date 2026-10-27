@@ -1,0 +1,10 @@
+schema_version = 1
+id = "ce-europe-iot-2mhz"
+name = "CE / Europe IoT — 2 MHz"
+description = "TaiXin-published IoT channel set: 864 and 866 MHz at 2 MHz bandwidth."
+jurisdiction = "CE / Europe — IoT applications"
+source_url = "https://taixin-semi.com/docs/txw8301/latest/%E6%B3%B0%E8%8A%AFah-rf-emc%E8%AE%A4%E8%AF%81%E6%8C%87%E5%8D%97-v2-6"
+warning = "Only use with a CE-capable TX-AH-R900PNR-860M or TX-AH-R900P implementation. This preset does not establish legal operation: verify the current rules for the country, application, antenna gain/EIRP, and either the applicable duty-cycle limit or polite-spectrum-access requirements. The selected 14 dBm is a conservative firmware setting, not a certified legal limit."
+channels_khz = [864000, 866000]
+bandwidth_mhz = 2
+tx_power_dbm = 14

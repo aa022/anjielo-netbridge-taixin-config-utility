@@ -1,0 +1,10 @@
+schema_version = 1
+id = "fcc-us-2mhz"
+name = "FCC / US — 2 MHz"
+description = "TaiXin-published FCC channel centres for 2 MHz operation in the US 902–928 MHz band."
+jurisdiction = "United States (FCC)"
+source_url = "https://taixin-semi.com/docs/txw8301/latest/%E6%B3%B0%E8%8A%AFah-rf-emc%E8%AE%A4%E8%AF%81%E6%8C%87%E5%8D%97-v2-6"
+warning = "For TX-AH-R900PNR or TX-AH-R900P only. TaiXin's certification configuration is not blanket authorization: confirm the exact module, antenna, equipment authorization, installation, and operator obligations before transmitting. Configure every peer with the same ordered channel list and bandwidth."
+channels_khz = [905000, 907000, 909000, 911000, 913000, 915000, 917000, 919000, 921000, 923000, 925000]
+bandwidth_mhz = 2
+tx_power_dbm = 20

@@ -1,0 +1,48 @@
+# Allowlist. Everything is ignored; only the paths below are tracked.
+# To track a new file, add an explicit "!/path" line for it.
+*
+!*/
+
+# Never descend into these directories.
+/.venv/
+/build/
+/dist/
+**/__pycache__/
+**/*.egg-info/
+/src/ah_netbridge/_native/
+
+# Project files.
+!/.gitignore
+!/LICENSE
+!/README.md
+!/Makefile
+!/MANIFEST.in
+!/pyproject.toml
+!/setup.py
+!/uv.lock
+!/requirements.lock
+!/include/taixinnet.h
+!/native/taixinnet.c
+!/src/ah_netbridge/*.py
+!/src/ah_netbridge/catalog/taixin_at_commands.toml
+!/src/ah_netbridge/presets/*.toml
+!/src/ah_netbridge/presets/README.md
+!/docs/board.png
+!/docs/demo.gif
+
+# Never track, even if an allowlist line above matches: keys, credentials,
+# device snapshots, saved configurations, debug logs and native binaries.
+*.psk
+psk.txt
+*.key
+*.pem
+*.ini
+anjielo-credentials-*
+credentials-*
+**/configs/
+[0-9a-f][0-9a-f]-[0-9a-f][0-9a-f]-[0-9a-f][0-9a-f]-[0-9a-f][0-9a-f]-[0-9a-f][0-9a-f]-[0-9a-f][0-9a-f]/
+debug-*.log
+*.so
+*.dylib
+*.o
+*.pyc

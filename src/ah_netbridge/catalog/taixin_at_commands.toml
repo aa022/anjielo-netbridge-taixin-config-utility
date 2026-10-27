@@ -1,0 +1,2276 @@
+schema_version = 1
+# TaiXin (Taixin / Huge-IC "hgic") AH (802.11ah HaLow) WNB firmware AT command catalog.
+# Target: TXW8301 (TXW4002A CK803) WNB bridge firmware v1.6.x (the AT+WNBCFG / AT+MODE=ap|sta family),
+# as used in TX-AH-R900P(NR) modules / Anjielo "AH Netbridge". Reachable over UART (115200 8N1, newline mode,
+# case-insensitive) and over NetAT UDP 56789 ("same usage as serial" per Taixin docs).
+#
+# Provenance (all fetched 2026-10-16, no device contacted):
+#  * Taixin "AH 模组 AT 指令开发指南" V4.8 (2025-09-18) PDF, in LilyGO T-Halow repo SDK/ folder.
+#  * Taixin AH AT guide V3.0 (2022-02-23) PDF on discuss.ardupilot.org.
+#  * LilyGO T-Halow-RJ45 docs/AT_cmd.md (English translation of the Taixin guide + extras).
+#  * Taixin hgSDK-v1.6.4.3-39706-wnb (LilyGO T-Halow SDK/AH-V1.6-SDK_20260106160634.zip):
+#    libwnb.h struct wnb_config, project/main.c, and libtxw4002a.a objects wnb_atcmd.o / lmac_test.o.
+#    The authoritative v1.6 command list and per-handler side effects (wnb_save_cfg / mcu_reset /
+#    syscfg_loaddef references) were derived by parsing ELF symbols + relocations of those objects
+#    (no code executed); LMAC test-table help strings come from the same objects / firmware .rodata.
+#  * Firmware strings: huge-ic-ah v1.6.3.3-26347, v1.6.4.3-29063, -38054, -39706 (same 164-171 cmd set).
+#  * Taixin-Semiconductor/TXW8301_WNB v2.4.1.3 project/atcmd.c (v2.x set; marked "[v2.x only]").
+#  * local:research/taixin_scan_macos.c (commands already exercised against the live unit).
+#
+# Response formats:
+#  * WNB-layer commands (most config): "+NAME:value\r\nOK\r\n" (atcmd_resp macro), errors "ERROR\r\n".
+#    Query with "AT+NAME?"; some also accept bare "AT+NAME". e.g. "+TXPOWER:20dbm", "+BSS_BW:8MHz".
+#  * LMAC test-table commands (registered as "AT+NAME="): query "AT+NAME=?", plain-text reply such as
+#    "tx mcs= 255" / "RSSI=-40" (no +NAME: prefix). An unrecognised AT+ command falls through to this
+#    table and prints "valid cmds:" followed by the numbered LMAC command list with help text.
+#  * persists: "yes" = handler calls wnb_save_cfg (auto-save; presumably skipped when wnbcfg.not_auto_save=1);
+#    "no" for LMAC test-table settings = no save call found in the handler (runtime only, lost on reboot).
+#  * safety: "set" commands that change ssid/psk/keymgmt/chan_list/bss_bw/mode drop the radio link
+#    (wnb_disassoc_all / retune). Over NetAT that may cut you off from a remote peer.
+#
+# WNBCFG field -> AT command (v1.6):
+#  role=MODE  bss_bw=BSS_BW  encrypt=KEYMGMT  key_set/psk=PSK  mkey_set=MCAST_PSK  join_group,group_aid=JOINGROUP
+#  freq_range=FREQ_RANGE  chan_list=CHAN_LIST  ssid=SSID  r_ssid=R_SSID  addr=MAC_ADDR(read)  tx_mcs=TX_MCS
+#  tx_power=TXPOWER  psconnect_period,psconnect_roundup=PS_CONNECT  psmode=PS_MODE  acktmo,ack_tmo=ACKTMO
+#  beacon_int=BEACON_INT  dtim_period=DTIM  agg_cnt=AGGCNT  roaming=ROAM  dupfilter=DUPFILTER
+#  heartbeat_int=HEART_INT  auto_sleep_time=AUTO_SLEEP  ap_psmode=AP_PSMODE  country_region=COUNTRY_REGION
+#  standby_channel/period=STANDBY  wait_psmode=WAIT_PSMODE  (runtime LMAC analogues only, not saved:)
+#  tx_bw~TX_BW  pri_chan~PRI_CHAN  auto_chsw~CS_EN  max_txcnt~TX_CNT_MAX  mcast_txmcs~MCAST_MCS
+#  mcast_txbw~MCAST_BW  mcast_dupcnt~MCAST_DUP  supper_pwr(_dis)~TX_PWR_SUPER  dcdc13~SET_VDD13(?)
+#  No AT command found (host-driver HGIC_CMD_* or compile-time only): forward, bssid_set, max_sta, acs_enable,
+#  acs_tmo, wkio_mode, bss_max_idle, aplost_time, roam_rssi_th, roam_int, dhcpc_en, dhcp_host, reassoc_wkhost,
+#  mcast_filter, auto_role, pa_pwrctrl_dis, pair_autostop, not_auto_save, auto_pair, wkup_io, wkio_edge,
+#  dis_1v1_m2u, psconnect_dis, ap_hide (AT+APHIDE is v2.x), roaming_samefreq, repeater_level, mcast_clearch,
+#  wkup_host_reason.
+
+[[command]]
+name = "MODE"
+summary = "WNB role: ap / sta / group (multicast) / apsta (repeater). Reply +MODE:<role>. On bridges with a hardware AP/STA role switch, firmware re-reads the switch at boot and overrides ap/sta (not group/apsta)"
+query = ["AT+MODE?", "AT+MODE"]
+set = "AT+MODE=<ap|sta|group|apsta>"
+args = "ap|sta|group|apsta (case-insensitive)"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) project/main.c; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "SSID"
+summary = "SSID (also used by pairing). Set disassociates all peers, saves, reconnects. Reply +SSID:<ssid>"
+query = ["AT+SSID?"]
+set = "AT+SSID=<ssid>"
+args = "string, < 32 chars"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "KEYMGMT"
+summary = "Encryption on/off. Set disassociates all peers and saves. Reply +KEYMGMT:WPA-PSK|NONE"
+query = ["AT+KEYMGMT?"]
+set = "AT+KEYMGMT=<WPA-PSK|NONE>"
+args = "WPA-PSK | NONE"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "PSK"
+summary = "Encryption key (32-byte PMK as 64 hex chars). Query returns the key in clear. Invalid length clears the stored key ('Wrong PSK, clear former PSK!')"
+query = ["AT+PSK?"]
+set = "AT+PSK=<64 hex chars>"
+args = "exactly 64 hex characters; anything else wipes the saved PSK"
+safety = "set"
+sensitive = true
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "MCAST_PSK"
+summary = "Multicast/group key (64 hex). Query prints key in clear (+MCAST_PSK:...)"
+query = ["AT+MCAST_PSK?"]
+set = "AT+MCAST_PSK=<64 hex chars>"
+args = "64 hex characters"
+safety = "set"
+sensitive = true
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "medium"
+
+[[command]]
+name = "BSS_BW"
+summary = "BSS bandwidth in MHz. WNB form replies +BSS_BW:<n>MHz and re-applies country-region freqinfo; an LMAC test-table entry 'AT+BSS_BW=' (=? -> 'bss bw=<n>MHz') also exists"
+query = ["AT+BSS_BW?", "AT+BSS_BW=?"]
+set = "AT+BSS_BW=<1|2|4|8>"
+args = "1, 2, 4 or 8 (MHz)"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "TX_MCS"
+summary = "Fixed TX MCS or auto. WNB form (AT+TX_MCS?/=) saves to flash; LMAC test form (AT+TX_MCS=?) reports runtime 'tx mcs= <n>'"
+query = ["AT+TX_MCS?", "AT+TX_MCS=?"]
+set = "AT+TX_MCS=<mcs>"
+args = "0-7 fixed (10 = MCS10 in 1 MHz); 255 (other values) = auto rate"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E7%BD%91%E6%A1%A5%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E.pdf (Taixin AH bridge guide); local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "FREQ_RANGE"
+summary = "Contiguous channel range by start/end centre freq (x10 MHz); module computes list. CHAN_LIST takes precedence. Reply +FREQ_RANGE:<start>-<end>"
+query = ["AT+FREQ_RANGE?"]
+set = "AT+FREQ_RANGE=<start>,<end>"
+args = "centre frequency in 100 kHz units, e.g. 9080,9240; must match module band (efuse type)"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "CHAN_LIST"
+summary = "Explicit channel list (centre freq x10 MHz). Reply +CHAN_LIST:f1,f2,..."
+query = ["AT+CHAN_LIST?"]
+set = "AT+CHAN_LIST=<f1>[,<f2>...]"
+args = "up to 16 comma-separated centre freqs in 100 kHz units, e.g. 8635,8645; must be valid for module band"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "CUR_FREQ"
+summary = "Current operating channel. Set disassociates all peers and retunes immediately (runtime, not saved)"
+query = ["AT+CUR_FREQ?"]
+set = "AT+CUR_FREQ=<freq>"
+args = "centre freq (100 kHz units), must be in chan list"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "medium"
+
+[[command]]
+name = "TXPOWER"
+summary = "Max TX power in dBm (runtime value). Reply +TXPOWER:<n>dbm. Set saves wnbcfg (cfg.tx_power, 5-bit field). WNBCFG tx_power shows the flash copy"
+query = ["AT+TXPOWER?"]
+set = "AT+TXPOWER=<dbm>"
+args = "6-20 dBm, 1 dB step (field is 5 bits, max 31)"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "AGGCNT"
+summary = "Aggregation count (agg_cnt). Handler does not call wnb_save_cfg. Reply +AGGCNT:<n>"
+query = ["AT+AGGCNT?"]
+set = "AT+AGGCNT=<n>"
+args = "integer (A-MPDU subframes)"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://discuss.ardupilot.org/uploads/short-url/xhohZa0t8VJo6dUBYHR7FZ9Zo6X.pdf (Taixin AH AT guide V3.0 2022-02-23); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "RESET"
+summary = "Immediate MCU reboot (handler only calls mcu_reset). Not documented by Taixin; v2.x firmware renamed it AT+RST"
+query = []
+set = "AT+RESET"
+args = ""
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "high"
+
+[[command]]
+name = "RSSI"
+summary = "Peer RSSI in dBm. Bare/?: first peer; =index (from 1) or =MAC. Reply +RSSI:<dBm>"
+query = ["AT+RSSI?", "AT+RSSI", "AT+RSSI=1", "AT+RSSI=<mac>"]
+set = ""
+args = "index (1..N) or aa:bb:cc:dd:ee:ff"
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "ROAM"
+summary = "STA roaming enable (exact or fuzzy SSID match, last 3 chars id). Reply +ROAM:enable|disable"
+query = ["AT+ROAM?"]
+set = "AT+ROAM=<0|1>"
+args = "0 disable, 1 enable (STA only)"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "PAIR"
+summary = "Start/stop quick pairing. AP may hand out SSID/key or random per-STA key; 'PAIR SUCCESS' event; must send AT+PAIR=0 to stop; pair result is saved on PAIR_DONE"
+query = []
+set = "AT+PAIR=<1|0>"
+args = "1 start, 0 stop"
+safety = "action"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/blob/main/docs/AT_cmd.md; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) project/main.c"
+confidence = "high"
+
+[[command]]
+name = "PAIRONLY"
+summary = "connect_paironly: only accept/attempt connections with paired peers"
+query = ["AT+PAIRONLY?"]
+set = "AT+PAIRONLY=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "medium"
+
+[[command]]
+name = "UNPAIR"
+summary = "Remove a paired STA by MAC (sends disassoc, updates unpair list). Reply 'unpair sta:<mac>' or 'sta:<mac> is not exist'"
+query = []
+set = "AT+UNPAIR=<mac>"
+args = "aa:bb:cc:dd:ee:ff"
+safety = "action"
+sensitive = false
+persists = "unknown"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/blob/main/docs/AT_cmd.md; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "CONN_STATE"
+summary = "Link state. Reply +CONNECTED or +DISCONNECT"
+query = ["AT+CONN_STATE"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "WNBCFG"
+summary = "Dump full saved wnb_config read from flash (syscfg_read): '+WNBCFG (<n>) OPEN|CLOSE' then field lines incl. psk/r_psk/mcast_key hex"
+query = ["AT+WNBCFG"]
+set = ""
+args = ""
+safety = "query"
+sensitive = true
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "DUMPSTA"
+summary = "List STA table: mac, pair, encrypt, connect, ps, psdata, ps_mode, psalive"
+query = ["AT+DUMPSTA"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "medium"
+
+[[command]]
+name = "DUMPFLASH"
+summary = "Hex-dump SPI NOR flash (default: syscfg region; optional addr,size). Read-only but exposes stored keys"
+query = ["AT+DUMPFLASH"]
+set = "AT+DUMPFLASH=<hexaddr>,<size>"
+args = "hex address, byte count (inferred from os_atoh/atoi refs)"
+safety = "query"
+sensitive = true
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "medium"
+
+[[command]]
+name = "BEACON_INT"
+summary = "Beacon interval (ms); restarts beacon timer. Reply +BEACON_INT:<ms>"
+query = ["AT+BEACON_INT?"]
+set = "AT+BEACON_INT=<ms>"
+args = "milliseconds"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://discuss.ardupilot.org/uploads/short-url/xhohZa0t8VJo6dUBYHR7FZ9Zo6X.pdf (Taixin AH AT guide V3.0 2022-02-23); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "DTIM"
+summary = "DTIM period used for STA sleep wake-ups. Reply +DTIM:<ms>"
+query = ["AT+DTIM?"]
+set = "AT+DTIM=<ms>"
+args = "e.g. 1000/2000/3000 (ms)"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "DUPFILTER"
+summary = "Duplicate-frame filter enable. Reply +DUPFILTER:<n>"
+query = ["AT+DUPFILTER?"]
+set = "AT+DUPFILTER=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "medium"
+
+[[command]]
+name = "JOINGROUP"
+summary = "Join multicast group (mode=group only). AID 1..N sends heartbeats; AID 0 = silent/unlimited"
+query = []
+set = "AT+JOINGROUP=<group_mac>,<aid>"
+args = "group MAC aa:bb:cc:dd:ee:ff, AID 0-255"
+safety = "set"
+sensitive = false
+persists = "unknown"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/blob/main/docs/AT_cmd.md; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "WAKEUP"
+summary = "AP side: wake a sleeping STA by MAC"
+query = []
+set = "AT+WAKEUP=<mac>"
+args = "aa:bb:cc:dd:ee:ff"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "DSLEEP"
+summary = "Enter deep sleep. Connected: =1 sleep keeping link; disconnected: =N sleep N s then retry (ps-connect). Reply +DSLEEP:awake|sleep"
+query = ["AT+DSLEEP?"]
+set = "AT+DSLEEP=<1|seconds>"
+args = "1 or seconds"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "R_SSID"
+summary = "Repeater (apsta) upstream SSID. Reply +R_SSID:<ssid>"
+query = ["AT+R_SSID?"]
+set = "AT+R_SSID=<ssid>"
+args = "string < 32 chars"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "R_PSK"
+summary = "Repeater upstream key (64 hex). Query prints in clear"
+query = ["AT+R_PSK?"]
+set = "AT+R_PSK=<64 hex chars>"
+args = "64 hex characters"
+safety = "set"
+sensitive = true
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "ROUTE"
+summary = "Print WNB route + loopback tables (to log)"
+query = ["AT+ROUTE"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "medium"
+
+[[command]]
+name = "PS_MODE"
+summary = "STA sleep mode 0-4 (0=none, 1=module keepalive, 2=AP proxies keepalive, 3=AP link/unicast wake, 4=wake only by AT+WAKEUP). Reply +PS_MODE:<n>"
+query = ["AT+PS_MODE?"]
+set = "AT+PS_MODE=<0-4>"
+args = "0..4"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/blob/main/docs/AT_cmd.md; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "WAIT_PSMODE"
+summary = "wait_psmode (2-bit) sleep-wait behaviour"
+query = ["AT+WAIT_PSMODE?"]
+set = "AT+WAIT_PSMODE=<0-3>"
+args = "0..3 (field width)"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "low"
+
+[[command]]
+name = "AP_PSMODE"
+summary = "AP power-save mode enable"
+query = ["AT+AP_PSMODE?"]
+set = "AT+AP_PSMODE=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "medium"
+
+[[command]]
+name = "AUTO_SLEEP"
+summary = "auto_sleep_time: idle time before automatic sleep"
+query = ["AT+AUTO_SLEEP?"]
+set = "AT+AUTO_SLEEP=<time>"
+args = "int16 (unit undocumented)"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "low"
+
+[[command]]
+name = "PS_CONNECT"
+summary = "PS-connect retry: sleep period (s) and max roundup count. Reply +PS_CONNECT:<period>,<roundup>"
+query = ["AT+PS_CONNECT?"]
+set = "AT+PS_CONNECT=<period_s>,<roundup>"
+args = "e.g. 60,3; roundup 1 = no increment"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "STANDBY"
+summary = "Standby channel and period (ms); out-of-range channel resets to 1. Reply +STANDBY:<ch>,<ms>"
+query = ["AT+STANDBY?"]
+set = "AT+STANDBY=<channel>,<period_ms>"
+args = "channel index, ms"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "low"
+
+[[command]]
+name = "BSSLIST"
+summary = "Print AP list from last AT+SCAN_AP (to log)"
+query = ["AT+BSSLIST"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "SCAN_AP"
+summary = "STA: start AP scan (results via AT+BSSLIST). Disrupts link while scanning"
+query = []
+set = "AT+SCAN_AP=<n>"
+args = "documented value 2"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "ACKTMO"
+summary = "Extra ACK timeout (us) for long links: 10*(km-1). Reply +ACKTMO:<us>. Saved (ack_tmo/acktmo fields)"
+query = ["AT+ACKTMO?"]
+set = "AT+ACKTMO=<us>"
+args = "microseconds, default 0"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "HEART_INT"
+summary = "Heartbeat interval (ms), min 500; since V1.6.2 set on AP only (synced to STA). Reply +HEART_INT:<ms>"
+query = ["AT+HEART_INT?"]
+set = "AT+HEART_INT=<ms>"
+args = ">= 500 ms, ~STA_count*50"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "VERSION"
+summary = "Firmware version. Reply +VERSION:v<a>.<b>.<c>.<d>-<svn>, app:<n>"
+query = ["AT+VERSION", "AT+VERSION=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/blob/main/docs/AT_cmd.md; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "BAUDRATE"
+summary = "UART-BUS firmware: UART0 baud (set via UART1)"
+query = ["AT+BAUDRATE=?", "AT+BAUDRATE?"]
+set = "AT+BAUDRATE=<baud>"
+args = "9600-400000"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "CUST_ISO"
+summary = "cust_isolation: customer/client isolation flag"
+query = ["AT+CUST_ISO?"]
+set = "AT+CUST_ISO=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "low"
+
+[[command]]
+name = "RXG_OFFSET"
+summary = "RX gain offset (rxg_offest) calibration value"
+query = ["AT+RXG_OFFSET?"]
+set = "AT+RXG_OFFSET=<n>"
+args = "int8"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "low"
+
+[[command]]
+name = "COUNTRY_REGION"
+summary = "Country region: applies region freqinfo (chan list, bss bw, tx_power) and saves. Requires bss_bw set first"
+query = ["AT+COUNTRY_REGION?"]
+set = "AT+COUNTRY_REGION=<code>"
+args = "US, EU, KR, SG, AU, NZ, ID, JP, MY, TH"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_ah_freqinfo.o"
+confidence = "medium"
+
+[[command]]
+name = "TXDATA"
+summary = "UART non-transparent mode: send <length> raw bytes next (1-to-many needs 14-byte Ethernet header). Puts console in data mode"
+query = []
+set = "AT+TXDATA=<len>[,<txbw>,<txmcs>,<priority>]"
+args = "len required; bw/mcs/priority 0-7 optional"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/blob/main/docs/AT_cmd.md; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) wnb_atcmd.o reloc analysis"
+confidence = "high"
+
+[[command]]
+name = "FWUPG"
+summary = "Enter UART XMODEM firmware upgrade mode (prints CCCC...)"
+query = []
+set = "AT+FWUPG"
+args = ""
+safety = "action"
+sensitive = false
+persists = "unknown"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) project/main.c"
+confidence = "high"
+
+[[command]]
+name = "SYSDBG"
+summary = "Toggle periodic debug prints: heap/top/irq/wnb/lmac (lmac default 2=brief, 1=verbose, 0=off)"
+query = []
+set = "AT+SYSDBG=<heap|top|irq|wnb|lmac>,<0|1|2>"
+args = "category, value"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) project/main.c"
+confidence = "high"
+
+[[command]]
+name = "SKBDUMP"
+summary = "Print skb pool usage (+SKBs:used:<n>, free:<n>)"
+query = ["AT+SKBDUMP"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) project/main.c; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "medium"
+
+[[command]]
+name = "ERRLOG"
+summary = "Error-log action errlog_action(n) on flash error log (semantics undocumented, may erase/print)"
+query = []
+set = "AT+ERRLOG=<n>"
+args = "integer action code"
+safety = "action"
+sensitive = false
+persists = "unknown"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) project/main.c; https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/tree/main/firmware (huge-ic-ah_v1.6.4.3-38054 strings)"
+confidence = "low"
+
+[[command]]
+name = "ACS_START"
+summary = "Auto channel select scan [LMAC runtime; reply is plain text]"
+query = ["AT+ACS_START=?"]
+set = "AT+ACS_START=<1>[,<ms_per_chan>]"
+args = "=1 or =1,10"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "ACK_TO"
+summary = "Extra ACK timeout (runtime; distinct from persistent AT+ACKTMO). 'extra ack timeout= <n>us' [LMAC runtime; reply is plain text]"
+query = ["AT+ACK_TO=?"]
+set = "AT+ACK_TO=<us>"
+args = "microseconds"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "ADC_DUMP"
+summary = "ADC dump flag (debug) [LMAC runtime; reply is plain text]"
+query = ["AT+ADC_DUMP=?"]
+set = "AT+ADC_DUMP=<flag>"
+args = "1..16 (normal, fcs err, ...), 0 off"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "AP_SLEEP_MODE"
+summary = "AP sleep RC clock enable [LMAC runtime; reply is plain text]"
+query = ["AT+AP_SLEEP_MODE=?"]
+set = "AT+AP_SLEEP_MODE=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "ANT_DUAL"
+summary = "Dual antenna enable [LMAC runtime; reply is plain text]"
+query = ["AT+ANT_DUAL=?"]
+set = "AT+ANT_DUAL=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "ANT_CTRL"
+summary = "Antenna control GPIO pin [LMAC runtime; reply is plain text]"
+query = ["AT+ANT_CTRL=?"]
+set = "AT+ANT_CTRL=<pin>"
+args = "GPIO number e.g. 31"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "ANT_AUTO"
+summary = "Automatic antenna selection [LMAC runtime; reply is plain text]"
+query = ["AT+ANT_AUTO=?"]
+set = "AT+ANT_AUTO=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "ANT_DEF"
+summary = "Default antenna [LMAC runtime; reply is plain text]"
+query = ["AT+ANT_DEF=?"]
+set = "AT+ANT_DEF=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "BGRSSI_MARGIN"
+summary = "Background-RSSI margin [LMAC runtime; reply is plain text]"
+query = ["AT+BGRSSI_MARGIN=?"]
+set = "AT+BGRSSI_MARGIN=<n>"
+args = "e.g. 0, 5"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "BGRSSI_MAX"
+summary = "Background-RSSI max threshold [LMAC runtime; reply is plain text]"
+query = ["AT+BGRSSI_MAX=?"]
+set = "AT+BGRSSI_MAX=<dBm>"
+args = "e.g. -80"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "BGRSSI_SPUR"
+summary = "Background-RSSI spur threshold [LMAC runtime; reply is plain text]"
+query = ["AT+BGRSSI_SPUR=?"]
+set = "AT+BGRSSI_SPUR=<n>"
+args = "e.g. 200"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "BUS_WT"
+summary = "Keep writing bus in test mode [LMAC runtime; reply is plain text]"
+query = ["AT+BUS_WT=?"]
+set = "AT+BUS_WT=<0|1>"
+args = "0/1"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "CCA_OBSV"
+summary = "CCA observation duration [LMAC runtime; reply is plain text]"
+query = ["AT+CCA_OBSV=?"]
+set = "AT+CCA_OBSV=<s>"
+args = "1-128 s"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "CCA_CE"
+summary = "CE-spec CCA (LBT) enable [LMAC runtime; reply is plain text]"
+query = ["AT+CCA_CE=?"]
+set = "AT+CCA_CE=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "CCMP_SUPPORT"
+summary = "AES-CCMP enable [LMAC runtime; reply is plain text]"
+query = ["AT+CCMP_SUPPORT=?"]
+set = "AT+CCMP_SUPPORT=<0|1>"
+args = "0 disable, 1 enable"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "CHAN_SCAN"
+summary = "All-channel bgrssi scan enable [LMAC runtime; reply is plain text]"
+query = ["AT+CHAN_SCAN=?"]
+set = "AT+CHAN_SCAN=<0|1>"
+args = "0/1"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "CS_CNT"
+summary = "Channel-switch countdown (beacons) [LMAC runtime; reply is plain text]"
+query = ["AT+CS_CNT=?"]
+set = "AT+CS_CNT=<n>"
+args = "e.g. 10"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "CS_EN"
+summary = "Auto channel switch enable (WNBCFG auto_chsw) [LMAC runtime; reply is plain text]"
+query = ["AT+CS_EN=?"]
+set = "AT+CS_EN=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "CS_NUM"
+summary = "Channel switch number (1 MHz steps from 700 MHz) [LMAC runtime; reply is plain text]"
+query = ["AT+CS_NUM=?"]
+set = "AT+CS_NUM=<n>"
+args = "e.g. 60"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "CS_PERIOD"
+summary = "Auto channel switch period [LMAC runtime; reply is plain text]"
+query = ["AT+CS_PERIOD=?"]
+set = "AT+CS_PERIOD=<ms>"
+args = "ms"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "CS_TH"
+summary = "Auto channel switch bgrssi threshold [LMAC runtime; reply is plain text]"
+query = ["AT+CS_TH=?"]
+set = "AT+CS_TH=<dB>"
+args = "e.g. 6"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "CTS_DUP"
+summary = "CTS duplicate enable [LMAC runtime; reply is plain text]"
+query = ["AT+CTS_DUP=?"]
+set = "AT+CTS_DUP=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "EDCA_AIFS"
+summary = "EDCA AIFS per AC [LMAC runtime; reply is plain text]"
+query = ["AT+EDCA_AIFS=?"]
+set = "AT+EDCA_AIFS=<ac>,<aifs>"
+args = "ac 0-3"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "EDCA_CW"
+summary = "EDCA CWmin/CWmax per AC [LMAC runtime; reply is plain text]"
+query = ["AT+EDCA_CW=?"]
+set = "AT+EDCA_CW=<ac>,<cwmin>,<cwmax>"
+args = "e.g. 0,7,1023"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "EDCA_TXOP"
+summary = "EDCA TXOP per AC (ms) [LMAC runtime; reply is plain text]"
+query = ["AT+EDCA_TXOP=?"]
+set = "AT+EDCA_TXOP=<ac>,<ms>"
+args = "e.g. 0,2"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "AP_BACKOFF"
+summary = "AP EDCA backoff (newer fw only, >= SVN ~29xxx) [LMAC runtime; reply is plain text]"
+query = ["AT+AP_BACKOFF=?"]
+set = "AT+AP_BACKOFF=<n>"
+args = "integer"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "low"
+
+[[command]]
+name = "EVM_MARGIN"
+summary = "EVM margin for MCS adaptation [LMAC runtime; reply is plain text]"
+query = ["AT+EVM_MARGIN=?"]
+set = "AT+EVM_MARGIN=<n>"
+args = "e.g. -2, 3"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "FREQ_LIST"
+summary = "LMAC channel list in kHz (runtime; WNB uses CHAN_LIST) [LMAC runtime; reply is plain text]"
+query = ["AT+FREQ_LIST=?"]
+set = "AT+FREQ_LIST=<kHz>[,...]"
+args = "kHz e.g. 760000,768000"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "FT_ATT"
+summary = "Factory-test attenuator [LMAC runtime; reply is plain text]"
+query = ["AT+FT_ATT=?"]
+set = "AT+FT_ATT=<dB>"
+args = "0/2/../62"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "LMAC_DBGSEL"
+summary = "LMAC debug selector [LMAC runtime; reply is plain text]"
+query = ["AT+LMAC_DBGSEL=?"]
+set = "AT+LMAC_DBGSEL=<hexmask>"
+args = "e.g. 0x01"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "LO_FREQ"
+summary = "Set LO frequency directly (retunes radio) [LMAC runtime; reply is plain text]"
+query = ["AT+LO_FREQ=?"]
+set = "AT+LO_FREQ=<kHz>"
+args = "730000-930000 kHz"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "LOADDEF"
+summary = "Factory default: syscfg_loaddef() + mcu_reset(). Erases SSID/PSK/pairing; reboots (LilyGO: to role=sta, no SSID). Help text also lists '=?' but handler is the reset path -- do not probe [LMAC runtime; reply is plain text]"
+query = []
+set = "AT+LOADDEF=1"
+args = "1"
+safety = "action"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Xinyuan-LilyGO/T-Halow-RJ45/blob/main/docs/AT_cmd.md; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "high"
+
+[[command]]
+name = "MAC_ADDR"
+summary = "Device MAC ('mac addr = xx-xx-..'). Set form exists but is runtime only / reported ineffective [LMAC runtime; reply is plain text]"
+query = ["AT+MAC_ADDR=?"]
+set = "AT+MAC_ADDR=0x<12 hex>"
+args = "0xa0b0c0d0e0f0"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c; https://github.com/markqvist/Reticulum/discussions/421"
+confidence = "medium"
+
+[[command]]
+name = "EFUSE_MAC"
+summary = "Read efuse MAC (refuses to change) [LMAC runtime; reply is plain text]"
+query = ["AT+EFUSE_MAC=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "MCAST_DUP"
+summary = "Multicast TX duplicate count (WNBCFG mcast_dupcnt) [LMAC runtime; reply is plain text]"
+query = ["AT+MCAST_DUP=?"]
+set = "AT+MCAST_DUP=<n>"
+args = "e.g. 3"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "MCAST_REORDER"
+summary = "Multicast RX dup-detect/reorder [LMAC runtime; reply is plain text]"
+query = ["AT+MCAST_REORDER=?"]
+set = "AT+MCAST_REORDER=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "MCAST_BW"
+summary = "Multicast TX bandwidth (WNBCFG mcast_txbw) [LMAC runtime; reply is plain text]"
+query = ["AT+MCAST_BW=?"]
+set = "AT+MCAST_BW=<1|2|4|8>"
+args = "MHz"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "MCAST_MCS"
+summary = "Multicast TX MCS (WNBCFG mcast_txmcs) [LMAC runtime; reply is plain text]"
+query = ["AT+MCAST_MCS=?"]
+set = "AT+MCAST_MCS=<0-7>"
+args = "0-7"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "MCAST_RTS"
+summary = "Multicast RTS enable [LMAC runtime; reply is plain text]"
+query = ["AT+MCAST_RTS=?"]
+set = "AT+MCAST_RTS=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "NOR_RD"
+summary = "'keep read nor flash in testmode' -- =? reports enable/disable; =1 starts continuous NOR reads (test) [LMAC runtime; reply is plain text]"
+query = ["AT+NOR_RD=?"]
+set = "AT+NOR_RD=<0|1>"
+args = "0/1"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "OBSS_CCA_DIFF"
+summary = "OBSS energy-detect CCA threshold [LMAC runtime; reply is plain text]"
+query = ["AT+OBSS_CCA_DIFF=?"]
+set = "AT+OBSS_CCA_DIFF=<dB>"
+args = "e.g. 4"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "OBSS_EDCA"
+summary = "OBSS EDCA enable [LMAC runtime; reply is plain text]"
+query = ["AT+OBSS_EDCA=?"]
+set = "AT+OBSS_EDCA=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "OBSS_NAV_DIFF"
+summary = "OBSS dual-NAV RSSI threshold [LMAC runtime; reply is plain text]"
+query = ["AT+OBSS_NAV_DIFF=?"]
+set = "AT+OBSS_NAV_DIFF=<dB>"
+args = "e.g. 6"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "OBSS_SWITCH"
+summary = "OBSS frequency switch enable [LMAC runtime; reply is plain text]"
+query = ["AT+OBSS_SWITCH=?"]
+set = "AT+OBSS_SWITCH=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "OBSS_TH"
+summary = "OBSS frequency switch RSSI threshold [LMAC runtime; reply is plain text]"
+query = ["AT+OBSS_TH=?"]
+set = "AT+OBSS_TH=<dBm>"
+args = "e.g. -30"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "OBSS_PER"
+summary = "OBSS frequency switch PER threshold [LMAC runtime; reply is plain text]"
+query = ["AT+OBSS_PER=?"]
+set = "AT+OBSS_PER=<pct>"
+args = "e.g. 30"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "PCF_EN"
+summary = "PCF enable [LMAC runtime; reply is plain text]"
+query = ["AT+PCF_EN=?"]
+set = "AT+PCF_EN=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "PCF_PERCENT"
+summary = "CFP percentage [LMAC runtime; reply is plain text]"
+query = ["AT+PCF_PERCENT=?"]
+set = "AT+PCF_PERCENT=<0-100>"
+args = "0-100"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "PCF_PERIOD"
+summary = "PCF period (x DTIM) [LMAC runtime; reply is plain text]"
+query = ["AT+PCF_PERIOD=?"]
+set = "AT+PCF_PERIOD=<n>"
+args = "e.g. 0, 3"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "PHY_RESET"
+summary = "Reset PHY [LMAC runtime; reply is plain text]"
+query = ["AT+PHY_RESET=?"]
+set = "AT+PHY_RESET=<1|0>"
+args = "1 reset"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "PRI_CHAN"
+summary = "Primary 1 MHz channel index (WNBCFG pri_chan) [LMAC runtime; reply is plain text]"
+query = ["AT+PRI_CHAN=?"]
+set = "AT+PRI_CHAN=<1-6>"
+args = "1-6"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "PRINT_PERIOD"
+summary = "LMAC status print period [LMAC runtime; reply is plain text]"
+query = ["AT+PRINT_PERIOD=?"]
+set = "AT+PRINT_PERIOD=<ms>"
+args = "ms, 0 disables"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "QA_ATT"
+summary = "QA scan attenuation [LMAC runtime; reply is plain text]"
+query = ["AT+QA_ATT=?"]
+set = "AT+QA_ATT=<dB>"
+args = "e.g. 20"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "QA_CFG"
+summary = "QA golden config [LMAC runtime; reply is plain text]"
+query = ["AT+QA_CFG=?"]
+set = "AT+QA_CFG=<freq>,<bw>,<mcs>,<per>"
+args = "4 params"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "QA_RESULTS"
+summary = "QA results [LMAC runtime; reply is plain text]"
+query = ["AT+QA_RESULTS=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "QA_RXTHD"
+summary = "QA DUT RX thresholds [LMAC runtime; reply is plain text]"
+query = ["AT+QA_RXTHD=?"]
+set = "AT+QA_RXTHD=<8 params>"
+args = "rssi,evm,freq_dev,..."
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "QA_START"
+summary = "QA test start/stop [LMAC runtime; reply is plain text]"
+query = ["AT+QA_START=?"]
+set = "AT+QA_START=<0|1>"
+args = "0/1"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "QA_TXTHD"
+summary = "QA DUT TX thresholds [LMAC runtime; reply is plain text]"
+query = ["AT+QA_TXTHD=?"]
+set = "AT+QA_TXTHD=<8 params>"
+args = "rssi,evm,freq_dev,..."
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "RC_NEW"
+summary = "New rate-control algorithm enable [LMAC runtime; reply is plain text]"
+query = ["AT+RC_NEW=?"]
+set = "AT+RC_NEW=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "REG_RD"
+summary = "Read 32-bit SoC or 16-bit RF register [LMAC runtime; reply is plain text]"
+query = []
+set = "AT+REG_RD=<addr>"
+args = "hex addr e.g. 0x20001000 or 0x830"
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "REG_WT"
+summary = "Write raw SoC/RF register -- can crash/brick radio [LMAC runtime; reply is plain text]"
+query = []
+set = "AT+REG_WT=<addr>,<val>"
+args = "hex addr, hex value"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "RF_RESET"
+summary = "Reset RF device [LMAC runtime; reply is plain text]"
+query = ["AT+RF_RESET=?"]
+set = "AT+RF_RESET=<1|0>"
+args = "1 reset"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "RTS_DUP"
+summary = "RTS duplicate enable [LMAC runtime; reply is plain text]"
+query = ["AT+RTS_DUP=?"]
+set = "AT+RTS_DUP=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "RX_AGC"
+summary = "Read RX AGC info ('rx agc= 0x..') [LMAC runtime; reply is plain text]"
+query = ["AT+RX_AGC=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "RX_ERR"
+summary = "Read RX error packet count [LMAC runtime; reply is plain text]"
+query = ["AT+RX_ERR=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "RX_EVM"
+summary = "Read RX average EVM (dB) [LMAC runtime; reply is plain text]"
+query = ["AT+RX_EVM=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "RX_PKTS"
+summary = "Read RX OK packet count [LMAC runtime; reply is plain text]"
+query = ["AT+RX_PKTS=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "RX_REORDER"
+summary = "LMAC RX ordered service [LMAC runtime; reply is plain text]"
+query = ["AT+RX_REORDER=?"]
+set = "AT+RX_REORDER=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "RX_RSSI"
+summary = "Read RX RSSI (dBm) [LMAC runtime; reply is plain text]"
+query = ["AT+RX_RSSI=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "SET_AGC"
+summary = "AGC enable / fixed gain index [LMAC runtime; reply is plain text]"
+query = ["AT+SET_AGC=?"]
+set = "AT+SET_AGC=<0|4|5>"
+args = "0 = AGC, 4/5 fixed gain"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "SET_AGC_TH"
+summary = "AGC thresholds [LMAC runtime; reply is plain text]"
+query = ["AT+SET_AGC_TH=?"]
+set = "AT+SET_AGC_TH=<a>,<b>"
+args = "e.g. -90,-100"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "SET_BGRSSI"
+summary = "Background RSSI / CCA threshold (0 = auto) [LMAC runtime; reply is plain text]"
+query = ["AT+SET_BGRSSI=?"]
+set = "AT+SET_BGRSSI=<n>"
+args = "0 auto, else fixed"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "SET_BGRSSI_AVG"
+summary = "Packets for bgrssi averaging [LMAC runtime; reply is plain text]"
+query = ["AT+SET_BGRSSI_AVG=?"]
+set = "AT+SET_BGRSSI_AVG=<n>"
+args = "e.g. 10"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "SET_RTS"
+summary = "RTS threshold (symbols of 40 us) [LMAC runtime; reply is plain text]"
+query = ["AT+SET_RTS=?"]
+set = "AT+SET_RTS=<n>"
+args = "e.g. 50"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "SET_VDD13"
+summary = "Core VDD13 mode (0: 1.32 V, 1: disable, 2: 1.375 V, 3: ...) -- power rail, risky [LMAC runtime; reply is plain text]"
+query = ["AT+SET_VDD13=?"]
+set = "AT+SET_VDD13=<0-3>"
+args = "0-3"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "SHORT_GI"
+summary = "Short guard interval [LMAC runtime; reply is plain text]"
+query = ["AT+SHORT_GI=?"]
+set = "AT+SHORT_GI=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "SHORT_TH"
+summary = "Short-frame length threshold [LMAC runtime; reply is plain text]"
+query = ["AT+SHORT_TH=?"]
+set = "AT+SHORT_TH=<n>"
+args = "e.g. 256, 0"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "SLEEP_EN"
+summary = "Enter sleep (STA test command) [LMAC runtime; reply is plain text]"
+query = []
+set = "AT+SLEEP_EN=<n>"
+args = "test"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "SMT_DAT"
+summary = "Read SMT date from efuse [LMAC runtime; reply is plain text]"
+query = ["AT+SMT_DAT=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "T_SENSOR"
+summary = "Chip temperature (Celsius) [LMAC runtime; reply is plain text]"
+query = ["AT+T_SENSOR=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "TEST_START"
+summary = "Enter/leave LMAC test mode (stops normal bridging) [LMAC runtime; reply is plain text]"
+query = ["AT+TEST_START=?"]
+set = "AT+TEST_START=<0|1>"
+args = "0 stop, 1 start"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_AGG_AUTO"
+summary = "TX aggregation auto-adjust [LMAC runtime; reply is plain text]"
+query = ["AT+TX_AGG_AUTO=?"]
+set = "AT+TX_AGG_AUTO=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_ATTN"
+summary = "TX digital gain attenuation (dB, >= -6); calls tx_digi_gain_store [LMAC runtime; reply is plain text]"
+query = ["AT+TX_ATTN=?"]
+set = "AT+TX_ATTN=<dB>"
+args = ">= -6, 1 dB step"
+safety = "set"
+sensitive = false
+persists = "unknown"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_CW"
+summary = "Continuous-wave LO-leakage transmit (lab test; regulatory risk) [LMAC runtime; reply is plain text]"
+query = ["AT+TX_CW=?"]
+set = "AT+TX_CW=<0|1>"
+args = "0/1"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_BW"
+summary = "TX bandwidth 1/2/4/8 MHz, other = dynamic (WNBCFG tx_bw) [LMAC runtime; reply is plain text]"
+query = ["AT+TX_BW=?"]
+set = "AT+TX_BW=<1|2|4|8|other>"
+args = "MHz"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "TX_BW_DYNAMIC"
+summary = "TX bandwidth dynamic adjust [LMAC runtime; reply is plain text]"
+query = ["AT+TX_BW_DYNAMIC=?"]
+set = "AT+TX_BW_DYNAMIC=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "TX_CNT_MAX"
+summary = "Max TX attempts per frame / RTS (WNBCFG max_txcnt) [LMAC runtime; reply is plain text]"
+query = ["AT+TX_CNT_MAX=?"]
+set = "AT+TX_CNT_MAX=<frm>,<rts>"
+args = "e.g. 7,31"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_CONT"
+summary = "Continuous TX (test, infinite payload) [LMAC runtime; reply is plain text]"
+query = ["AT+TX_CONT=?"]
+set = "AT+TX_CONT=<0|1>"
+args = "0/1"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_DELAY"
+summary = "Test-mode TX delay [LMAC runtime; reply is plain text]"
+query = ["AT+TX_DELAY=?"]
+set = "AT+TX_DELAY=<ms>"
+args = "ms"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_DST_ADDR"
+summary = "Test TX destination [LMAC runtime; reply is plain text]"
+query = ["AT+TX_DST_ADDR=?"]
+set = "AT+TX_DST_ADDR=0x<12 hex>"
+args = "MAC as hex"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_FAIL"
+summary = "Read TX failed packet count [LMAC runtime; reply is plain text]"
+query = ["AT+TX_FAIL=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "TX_FC"
+summary = "Test TX frame control [LMAC runtime; reply is plain text]"
+query = ["AT+TX_FC=?"]
+set = "AT+TX_FC=<hex>"
+args = "e.g. 0x0308"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_FLAGS"
+summary = "Test TX info flags [LMAC runtime; reply is plain text]"
+query = ["AT+TX_FLAGS=?"]
+set = "AT+TX_FLAGS=<hex>"
+args = "e.g. 0x80000000"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_LEN"
+summary = "Test TX payload length [LMAC runtime; reply is plain text]"
+query = ["AT+TX_LEN=?"]
+set = "AT+TX_LEN=<n>"
+args = "decimal bytes"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_MAX_AGG"
+summary = "Max A-MPDU subframes [LMAC runtime; reply is plain text]"
+query = ["AT+TX_MAX_AGG=?"]
+set = "AT+TX_MAX_AGG=<1-64>"
+args = "1-64"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "TX_MAX_SYMS"
+summary = "Max TX symbols [LMAC runtime; reply is plain text]"
+query = ["AT+TX_MAX_SYMS=?"]
+set = "AT+TX_MAX_SYMS=<n>"
+args = "<= 511"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_MCS_MAX"
+summary = "Upper MCS limit for rate control [LMAC runtime; reply is plain text]"
+query = ["AT+TX_MCS_MAX=?"]
+set = "AT+TX_MCS_MAX=<n>"
+args = "0-7"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "TX_MCS_MIN"
+summary = "Lower MCS limit for rate control [LMAC runtime; reply is plain text]"
+query = ["AT+TX_MCS_MIN=?"]
+set = "AT+TX_MCS_MIN=<n>"
+args = "0-7"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "TX_ORDERED"
+summary = "LMAC strictly-ordered service [LMAC runtime; reply is plain text]"
+query = ["AT+TX_ORDERED=?"]
+set = "AT+TX_ORDERED=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_PHA_AMP"
+summary = "TX LUT phase/amp test mode [LMAC runtime; reply is plain text]"
+query = ["AT+TX_PHA_AMP=?"]
+set = "AT+TX_PHA_AMP=<0-3>"
+args = "0 normal..3"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_PKTS"
+summary = "Read TX packet count [LMAC runtime; reply is plain text]"
+query = ["AT+TX_PKTS=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "TX_PWR_AUTO"
+summary = "TX power auto-adjust enable [LMAC runtime; reply is plain text]"
+query = ["AT+TX_PWR_AUTO=?"]
+set = "AT+TX_PWR_AUTO=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_PWR_MAX"
+summary = "Max TX power index ('tx pwr idx= n') [LMAC runtime; reply is plain text]"
+query = ["AT+TX_PWR_MAX=?"]
+set = "AT+TX_PWR_MAX=<3-5>"
+args = "3-5"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_PWR_SUPER"
+summary = "Allow TX power above max ('super power', 22 or 25 dBm depending on module). Default on in normal mode (WNBCFG supper_pwr[_dis]/super_pwr) [LMAC runtime; reply is plain text]"
+query = ["AT+TX_PWR_SUPER=?"]
+set = "AT+TX_PWR_SUPER=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18)"
+confidence = "high"
+
+[[command]]
+name = "TX_PWR_SUPER_TH"
+summary = "SNR threshold for super power [LMAC runtime; reply is plain text]"
+query = ["AT+TX_PWR_SUPER_TH=?"]
+set = "AT+TX_PWR_SUPER_TH=<n>"
+args = "e.g. 20"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_RATE_FIXED"
+summary = "No rate fallback on retry [LMAC runtime; reply is plain text]"
+query = ["AT+TX_RATE_FIXED=?"]
+set = "AT+TX_RATE_FIXED=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_START"
+summary = "Start/stop test transmission [LMAC runtime; reply is plain text]"
+query = ["AT+TX_START=?"]
+set = "AT+TX_START=<0|1>"
+args = "0/1"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_STEP"
+summary = "Sine/triangle LUT step (test) [LMAC runtime; reply is plain text]"
+query = ["AT+TX_STEP=?"]
+set = "AT+TX_STEP=<n>"
+args = "<= 511"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_TRIG"
+summary = "Transmit one test frame [LMAC runtime; reply is plain text]"
+query = ["AT+TX_TRIG=?"]
+set = "AT+TX_TRIG=<0|1>"
+args = "0/1"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_TYPE"
+summary = "Test frame type Normal/Sine/Triangle [LMAC runtime; reply is plain text]"
+query = ["AT+TX_TYPE=?"]
+set = "AT+TX_TYPE=<N|S|T>"
+args = "N/S/T"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TXOP_EN"
+summary = "TXOP enable [LMAC runtime; reply is plain text]"
+query = ["AT+TXOP_EN=?"]
+set = "AT+TXOP_EN=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "TX_TRV_PILOT_EN"
+summary = "Travelling pilots enable (newer fw) [LMAC runtime; reply is plain text]"
+query = ["AT+TX_TRV_PILOT_EN=?"]
+set = "AT+TX_TRV_PILOT_EN=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "low"
+
+[[command]]
+name = "WAKE_EN"
+summary = "Wake STAs (AP test command) [LMAC runtime; reply is plain text]"
+query = []
+set = "AT+WAKE_EN=<aid>"
+args = "aid"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "XO_CS"
+summary = "Crystal (XO) cap trim -- calibration, calls xo_cs_store [LMAC runtime; reply is plain text]"
+query = ["AT+XO_CS=?"]
+set = "AT+XO_CS=<hex>"
+args = "e.g. 0x8"
+safety = "action"
+sensitive = false
+persists = "unknown"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "XO_CS_AUTO"
+summary = "Auto XO frequency calibration (range Hz) [LMAC runtime; reply is plain text]"
+query = ["AT+XO_CS_AUTO=?"]
+set = "AT+XO_CS_AUTO=<min>,<max>"
+args = "e.g. -2000,2000"
+safety = "action"
+sensitive = false
+persists = "unknown"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "LO_TABLE"
+summary = "Read LO table (prints, but code also kicks LO table) [LMAC runtime; reply is plain text]"
+query = ["AT+LO_TABLE=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "low"
+
+[[command]]
+name = "PS_CHECK"
+summary = "PS debug state (ps_state, radio_on, power_save) [LMAC runtime; reply is plain text]"
+query = ["AT+PS_CHECK=?"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "RADIO_ONOFF"
+summary = "Radio TX/RX on/off -- off kills the link [LMAC runtime; reply is plain text]"
+query = ["AT+RADIO_ONOFF=?"]
+set = "AT+RADIO_ONOFF=<0|1>"
+args = "0 off, 1 on"
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "STA_INFO"
+summary = "Per-STA LMAC stats (RSSI, EVM...) by ID from 1 (AP side) [LMAC runtime; reply is plain text]"
+query = ["AT+STA_INFO=?", "AT+STA_INFO=1"]
+set = ""
+args = ""
+safety = "query"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis; https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); local:research/taixin_scan_macos.c"
+confidence = "high"
+
+[[command]]
+name = "STA_PSK"
+summary = "Per-STA PSK set by AID or dump ('sta psk:' list with keys in hex) [LMAC runtime; reply is plain text]"
+query = ["AT+STA_PSK=?"]
+set = "AT+STA_PSK=<aid>,<psk>"
+args = "aid, 64 hex"
+safety = "set"
+sensitive = true
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/AH-V1.6-SDK_20260106160634.zip (hgSDK-v1.6.4.3-39706-wnb libtxw4002a.a) lmac_test.o help string + reloc analysis"
+confidence = "medium"
+
+[[command]]
+name = "ENCRYPT"
+summary = "[v2.x firmware only] encryption on/off (v1.6 uses AT+KEYMGMT; probing on v1.6 yields 'valid cmds:')"
+query = ["AT+ENCRYPT?"]
+set = "AT+ENCRYPT=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c; local:research/taixin_scan_macos.c"
+confidence = "medium"
+
+[[command]]
+name = "RST"
+summary = "[v2.x firmware only] reboot (mcu_reset). On v1.6 use AT+RESET"
+query = []
+set = "AT+RST"
+args = ""
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "high"
+
+[[command]]
+name = "WIFIMODE"
+summary = "[v2.x only] mode: ap, sta, apsta, wnbsta, wnbap, wnbapsta, apwnbsta, wnbapwnbsta, apwnbap"
+query = ["AT+WIFIMODE?"]
+set = "AT+WIFIMODE=<mode>"
+args = "see summary"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "high"
+
+[[command]]
+name = "KEY"
+summary = "[v2.x only] WPA passphrase (>= 8 chars); query prints in clear"
+query = ["AT+KEY?"]
+set = "AT+KEY=<passphrase>"
+args = ">= 8 chars"
+safety = "set"
+sensitive = true
+persists = "yes"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "high"
+
+[[command]]
+name = "R_KEY"
+summary = "[v2.x only] repeater upstream passphrase"
+query = ["AT+R_KEY?"]
+set = "AT+R_KEY=<passphrase>"
+args = ">= 8 chars"
+safety = "set"
+sensitive = true
+persists = "yes"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "high"
+
+[[command]]
+name = "CHANNEL"
+summary = "[v2.x only] channel index"
+query = ["AT+CHANNEL?"]
+set = "AT+CHANNEL=<n>"
+args = "channel index"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "high"
+
+[[command]]
+name = "APHIDE"
+summary = "[v2.x only] hide SSID"
+query = ["AT+APHIDE?"]
+set = "AT+APHIDE=<0|1>"
+args = "0/1"
+safety = "set"
+sensitive = false
+persists = "yes"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "high"
+
+[[command]]
+name = "SCAN"
+summary = "[v2.x only] scan"
+query = []
+set = "AT+SCAN"
+args = ""
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "medium"
+
+[[command]]
+name = "SYSCFG"
+summary = "[v2.x only] dump syscfg"
+query = ["AT+SYSCFG"]
+set = ""
+args = ""
+safety = "query"
+sensitive = true
+persists = "no"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "medium"
+
+[[command]]
+name = "ICMPMNTR"
+summary = "[v2.x only] ICMP monitor"
+query = []
+set = "AT+ICMPMNTR=<...>"
+args = ""
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c"
+confidence = "low"
+
+[[command]]
+name = "IPERF2"
+summary = "[v2.x only] iperf2 client/server traffic"
+query = []
+set = "AT+IPERF2=<mode>,..."
+args = ""
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c; https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/sdk/lib/common/atcmd.c"
+confidence = "medium"
+
+[[command]]
+name = "PING"
+summary = "[v2.x / IoT SDK only] ping; blocks AT console"
+query = []
+set = "AT+PING=<ip>,<count>,<size>"
+args = ""
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18); https://github.com/Taixin-Semiconductor/TXW8301_WNB/blob/v2.4.1.3/project/atcmd.c"
+confidence = "high"
+
+[[command]]
+name = "IP"
+summary = "[IoT SDK only] IP address"
+query = ["AT+IP=?"]
+set = "AT+IP=<ip>"
+args = "dotted quad"
+safety = "set"
+sensitive = false
+persists = "unknown"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18)"
+confidence = "high"
+
+[[command]]
+name = "TCPTEST"
+summary = "[IoT SDK only] TCP traffic test; needs module reset to stop"
+query = []
+set = "AT+TCPTEST=<ip>,<port>[,s]"
+args = ""
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18)"
+confidence = "high"
+
+[[command]]
+name = "UDPTEST"
+summary = "[IoT SDK only] UDP traffic test; needs module reset to stop"
+query = []
+set = "AT+UDPTEST=<ip>,<port>,<len>,<interval>,<c|s>"
+args = ""
+safety = "action"
+sensitive = false
+persists = "no"
+source = "https://github.com/Xinyuan-LilyGO/T-Halow/blob/master/SDK/%E6%B3%B0%E8%8A%AFAH%E6%A8%A1%E7%BB%84AT%E6%8C%87%E4%BB%A4%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.pdf (Taixin AH AT guide V4.8 2025-09-18)"
+confidence = "high"

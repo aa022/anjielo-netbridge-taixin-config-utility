@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ah-netbridge"
+version = "2.2.0"
+description = "TaiXin NetAT bridge configuration: safe full-screen TUI plus a scriptable CLI with gated raw AT dispatch"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "0BSD"}
+authors = [{name = "AH Netbridge contributors"}]
+dependencies = []
+
+[project.scripts]
+ah-netbridge-config = "ah_netbridge.cli:main"
+ahnb = "ah_netbridge.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ah_netbridge = ["_native/*", "presets/*", "catalog/*.toml"]

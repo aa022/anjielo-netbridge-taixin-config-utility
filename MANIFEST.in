@@ -1,0 +1,8 @@
+include LICENSE
+include include/taixinnet.h
+include native/taixinnet.c
+include Makefile
+include requirements.lock
+include uv.lock
+recursive-include src/ah_netbridge/presets *.toml *.md
+recursive-include src/ah_netbridge/catalog *.toml
